@@ -242,27 +242,43 @@ class TextGenerator(Protocol):
     def generate(self, prompt: str) -> str: ...
 
 
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+
 class OpenAIGenerator:
+    """Calls Gemini through its OpenAI-compatible endpoint (no extra dependency).
+
+    Deviation from the starter: OpenAI credits were unavailable, so generation
+    uses Gemini. Retrieval, prompt and temperature are unchanged.
+    """
+
     def __init__(self, max_output_tokens: int = 300) -> None:
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        self.model = os.getenv("OPENAI_MODEL", "").strip()
+        api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        self.model = os.getenv("GEMINI_MODEL", "").strip()
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is missing from .env")
+            raise RuntimeError("GEMINI_API_KEY is missing from .env")
         if not self.model:
-            raise RuntimeError("OPENAI_MODEL is missing from .env")
-        self.client = OpenAI(api_key=api_key)
+            raise RuntimeError("GEMINI_MODEL is missing from .env")
+        self.client = OpenAI(api_key=api_key, base_url=GEMINI_BASE_URL, max_retries=5)
         self.max_output_tokens = max_output_tokens
+        self._last_call = 0.0
 
     def generate(self, prompt: str) -> str:
-        response = self.client.responses.create(
+        # ponytail: fixed pacing for the free tier (15 requests/min); drop it on a paid plan.
+        wait = 4.2 - (time.monotonic() - self._last_call)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_call = time.monotonic()
+        # Gemini's compatibility layer supports Chat Completions, not the Responses API.
+        response = self.client.chat.completions.create(
             model=self.model,
-            input=prompt,
+            messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_output_tokens=self.max_output_tokens,
+            max_tokens=self.max_output_tokens,
         )
-        answer = response.output_text.strip()
+        answer = (response.choices[0].message.content or "").strip()
         if not answer:
-            raise RuntimeError("OpenAI returned an empty answer")
+            raise RuntimeError("Gemini returned an empty answer")
         return answer
 
 
